@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>적정 주가 산출기 계산기</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 30px; line-height: 1.5; }
+    input, select { width: 150px; margin: 4px; }
+    label { display: inline-block; width: 200px; }
+    .section { margin-top: 30px; border-top: 1px solid #ccc; padding-top: 20px; }
+    .output { font-weight: bold; color: green; }
+  </style>
+</head>
+<body>
+  <h2>적정 주가 산출기</h2>
+
+  <div class="section" style="display: flex; gap: 60px; align-items: center;">
+    <label style="display: flex; flex-direction: column; align-items: center; font-weight: bold;">
+      <input type="radio" name="mode" value="manual" checked onclick="toggleMode()">
+      <span>순이익<br>직접입력</span>
+    </label>
+    <label style="display: flex; flex-direction: column; align-items: center; font-weight: bold;">
+      <input type="radio" name="mode" value="auto" onclick="toggleMode()">
+      <span>TAM기반<br>자동계산</span>
+    </label>
+  </div>
+
+  <div class="section">
+    <h3>1. 기본 정보 입력</h3>
+    <label>발행주식수</label><input type="number" id="shares" value="10000000"><br>
+    <label>단기금융자산 (억)</label><input type="number" id="shortTerm" value="300" oninput="updateNOPA()"><br>
+    <label>현금및현금성자산 (억)</label><input type="number" id="cash" value="200" oninput="updateNOPA()"><br>
+    <label>투자부동산 (억)</label><input type="number" id="realEstate" value="300" oninput="updateNOPA()"><br>
+    <label>투자자산 (억)</label><input type="number" id="investment" value="200" oninput="updateNOPA()"><br>
+    <label>비영업용 자산 NOPA 합계 (억)</label><input type="number" id="nopa" value="1000" readonly style="background-color:#eee; cursor:not-allowed;"><br>
+  </div>
+
+  <div class="section">
+    <h3>2. 성장률과 할인율</h3>
+    <label>실질GDP 성장률 (%)</label><input type="number" step="0.1" id="gdp" value="2.0" oninput="updateGrowthRate()"><br>
+    <label>소비자물가상승률(CPI, %)</label><input type="number" step="0.1" id="cpi" value="2.0" oninput="updateGrowthRate()"><br>
+    <label>10년 국채금리 (%)</label><input type="number" step="0.1" id="bond" value="4.0" oninput="updateGrowthRate(); updateDiscountRate();"><br>
+    <label>안전마진 (%)</label><input type="number" step="0.1" id="margin" value="1.0" oninput="updateGrowthRate()"><br>
+    <label>영구 성장률 g (%)</label><input type="number" step="0.01" id="g" value="4.00" readonly style="background-color:#eee; cursor:not-allowed;"><br>
+    <label>베타 (β)</label><input type="number" step="0.01" id="beta" value="1.0" oninput="updateDiscountRate()"><br>
+    <label>KOSPI PER</label><input type="number" step="0.1" id="kospiPer" value="10" oninput="updateDiscountRate()"><br>
+    <label>시장위험프리미엄 (%)</label><input type="number" id="mrp" readonly style="background-color:#eee; cursor:not-allowed;"><br>
+    <label>할인율 r (%)</label><input type="number" id="r" readonly style="background-color:#eee; cursor:not-allowed;"><br>
+    <label>예측 연도 수 N</label><input type="number" id="n" value="5" onchange="addEarningsInputs()"><br>
+  </div>
+
+  <div class="section" id="manualInputs">
+    <h3>3. 연도별 순이익 예측 (E_t, 억)</h3>
+    <div id="earningsInputs"></div>
+    <button onclick="addEarningsInputs()">이익 입력란 생성/갱신</button>
+  </div>
+
+  <div class="section" id="autoInputs" style="display:none">
+    <h3>3. 자동 계산 입력 항목</h3>
+    <label>TAM (조 원)</label><input type="number" step="0.1" id="tam" value="15"><br>
+    <label>침투율 시작값 (%)</label><input type="number" id="penetration" value="10"><br>
+    <label>침투율 증가율 (%/년)</label><input type="number" id="penetrationGrowth" value="2"><br>
+    <label>시장점유율 (%, 연도별 쉼표 구분)</label><input type="text" id="marketShare" value="5,8,12,15,18"><br>
+    <label>평균판매단가 (만원)</label><input type="number" id="pricePerUnit" value="300"><br>
+    <label>변동비율 (%)</label><input type="number" id="varCostRatio" value="40"><br>
+    <label>고정비 (억 원)</label><input type="number" id="fixedCost" value="1000"><br>
+    <label>고정비 증가율 (%/년)</label><input type="number" id="fixedCostGrowth" value="3"><br>
+    <label>세율 (%)</label><input type="number" id="taxRate" value="25"><br>
+  </div>
+
+  <div class="section">
+    <button onclick="calculateFairPrice()">적정 주가 계산</button>
+    <p class="output">적정 주가: <span id="result">-</span> 원</p>
+  </div>
+
+  <script>
+    function toggleMode() {
+      const mode = document.querySelector('input[name="mode"]:checked').value;
+      document.getElementById('manualInputs').style.display = (mode === 'manual') ? 'block' : 'none';
+      document.getElementById('autoInputs').style.display = (mode === 'auto') ? 'block' : 'none';
+    }
+
+    function updateDiscountRate() {
+      const bond = parseFloat(document.getElementById('bond').value) || 0;
+      const kospiPer = parseFloat(document.getElementById('kospiPer').value) || 0;
+      const g = parseFloat(document.getElementById('g').value) || 0;
+      const beta = parseFloat(document.getElementById('beta').value) || 1.0;
+
+      let mrp = 0;
+      if (kospiPer > 0) {
+        mrp = (100 / kospiPer + g - bond);
+      }
+      const r = bond + beta * mrp;
+      document.getElementById('mrp').value = mrp.toFixed(2);
+      document.getElementById('r').value = r.toFixed(2);
+    }
+
+    function updateNOPA() {
+      const shortTerm = parseFloat(document.getElementById('shortTerm').value) || 0;
+      const cash = parseFloat(document.getElementById('cash').value) || 0;
+      const realEstate = parseFloat(document.getElementById('realEstate').value) || 0;
+      const investment = parseFloat(document.getElementById('investment').value) || 0;
+      const total = shortTerm + cash + realEstate + investment;
+      document.getElementById('nopa').value = total.toFixed(2);
+    }
+
+    function updateGrowthRate() {
+      const gdp = parseFloat(document.getElementById('gdp').value) || 0;
+      const cpi = parseFloat(document.getElementById('cpi').value) || 0;
+      const bond = parseFloat(document.getElementById('bond').value) || 0;
+      const margin = parseFloat(document.getElementById('margin').value) || 0;
+      const g1 = gdp + cpi;
+      const g2 = bond - margin;
+      const g = Math.min(g1, g2);
+      document.getElementById('g').value = g.toFixed(2);
+    }
+
+    function addEarningsInputs() {
+      const n = parseInt(document.getElementById('n').value);
+      const container = document.getElementById('earningsInputs');
+      container.innerHTML = '';
+      for (let i = 1; i <= n; i++) {
+        const label = document.createElement('label');
+        label.textContent = `${i}년차 순이익 (E_${i})`;
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.step = '0.01';
+        input.id = `E_${i}`;
+        input.value = i * 100;
+        container.appendChild(label);
+        container.appendChild(input);
+        container.appendChild(document.createElement('br'));
+      }
+    }
+
+    function calculateFairPrice() {
+      const shares = parseFloat(document.getElementById('shares').value);
+      const nopa = parseFloat(document.getElementById('nopa').value) * 100000000;
+      const r = parseFloat(document.getElementById('r').value) / 100;
+      const g = parseFloat(document.getElementById('g').value) / 100;
+      const n = parseInt(document.getElementById('n').value);
+      const mode = document.querySelector('input[name="mode"]:checked').value;
+
+      let presentValueSum = 0;
+      let lastE = 0;
+
+      if (mode === 'manual') {
+        for (let t = 1; t <= n; t++) {
+          const E = parseFloat(document.getElementById(`E_${t}`).value) * 100000000;
+          presentValueSum += E / Math.pow(1 + r, t);
+          lastE = E;
+        }
+      } else {
+        const tam = parseFloat(document.getElementById('tam').value) * 1e12;
+        const penStart = parseFloat(document.getElementById('penetration').value);
+        const penGrowth = parseFloat(document.getElementById('penetrationGrowth').value);
+        const marketShares = document.getElementById('marketShare').value.split(',').map(Number);
+        const pricePerUnit = parseFloat(document.getElementById('pricePerUnit').value) * 10000;
+        const varCostRatio = parseFloat(document.getElementById('varCostRatio').value) / 100;
+        const fixedCost = parseFloat(document.getElementById('fixedCost').value) * 100000000;
+        const fixedCostGrowth = parseFloat(document.getElementById('fixedCostGrowth').value) / 100;
+        const taxRate = parseFloat(document.getElementById('taxRate').value) / 100;
+
+        let fc = fixedCost;
+        for (let t = 0; t < n; t++) {
+          const pen = penStart + penGrowth * t;
+          const ms = marketShares[t] || marketShares[marketShares.length - 1];
+          const revenue = tam * (pen / 100) * (ms / 100);
+          const totalSales = revenue * pricePerUnit;
+          const ebit = totalSales * (1 - varCostRatio) - fc;
+          const netIncome = ebit * (1 - taxRate);
+          const E = netIncome;
+          presentValueSum += E / Math.pow(1 + r, t + 1);
+          lastE = E;
+          fc *= (1 + fixedCostGrowth);
+        }
+      }
+
+      const EN1 = lastE * (1 + g);
+      const terminalValue = EN1 / (r - g);
+      const pvTerminalValue = terminalValue / Math.pow(1 + r, n);
+
+      const intrinsicValue = presentValueSum + pvTerminalValue + nopa;
+      const fairPrice = intrinsicValue / shares;
+
+      document.getElementById('result').textContent = fairPrice.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    }
+
+    window.onload = function() {
+      addEarningsInputs();
+      updateGrowthRate();
+      updateDiscountRate();
+      updateNOPA();
+    }
+  </script>
+</body>
+</html>
